@@ -1,7 +1,7 @@
 """
-AI Job Hunt OS — Test Build v0.1
-A Streamlit app that tracks job applications and uses AI to tailor resumes
-and generate cover letters.
+AI Job Hunt OS — Test Build v0.2
+Streamlit app that tracks job applications and uses AI (Groq + Sea Lion)
+to tailor resumes and generate cover letters.
 
 Run:
     streamlit run app.py
@@ -15,6 +15,8 @@ import streamlit as st
 from dotenv import load_dotenv
 from sqlalchemy import Column, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
+from groq import Groq
+from openai import OpenAI
 
 # ---------------------------------------------------------------------------
 # 1. CONFIGURATION (must run before any other Streamlit command)
@@ -29,6 +31,30 @@ st.set_page_config(
 
 load_dotenv()  # Load .env if present
 
+# ============================================================
+# 🚀 API KEY CONFIGURATION (Colab + local/Streamlit Cloud compatible)
+# ============================================================
+try:
+    from google.colab import userdata
+    GROQ_API_KEY = userdata.get("GROQ_API_KEY")
+    SEALION_API_KEY = userdata.get("SEALION_API_KEY")
+    HF_TOKEN = userdata.get("HF_TOKEN")
+except ImportError:
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+    SEALION_API_KEY = os.environ.get("SEALION_API_KEY")
+    HF_TOKEN = os.environ.get("HF_TOKEN")
+
+if not GROQ_API_KEY or not SEALION_API_KEY:
+    st.error("Missing API keys. Set GROQ_API_KEY and SEALION_API_KEY in environment or secrets.")
+    st.stop()
+
+if HF_TOKEN:
+    os.environ["HF_TOKEN"] = HF_TOKEN
+
+groq_client = Groq(api_key=GROQ_API_KEY)
+SEALION_BASE_URL = "https://api.sea-lion.ai/v1"
+sealion_client = OpenAI(api_key=SEALION_API_KEY, base_url=SEALION_BASE_URL)
+
 # Constants -----------------------------------------------------------------
 
 STAGES = [
@@ -42,6 +68,10 @@ STAGES = [
 
 DB_PATH = "job_hunt.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+# LLM provider defaults
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+SEALION_MODEL = os.environ.get("SEALION_MODEL", "aisingapore/Llama-SEA-LION-v3-70B-IT")
 
 # ---------------------------------------------------------------------------
 # 2. DATABASE LAYER
@@ -71,7 +101,6 @@ class Application(Base):
 
 @st.cache_resource
 def get_engine():
-    """Create the SQLAlchemy engine once."""
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
     return engine
@@ -87,7 +116,7 @@ def db_session():
 
 
 # ---------------------------------------------------------------------------
-# 3. AI LAYER (with graceful fallback if no API key is present)
+# 3. AI LAYER
 # ---------------------------------------------------------------------------
 
 @st.cache_resource(show_spinner="Loading embedding model (first run only)...")
@@ -103,36 +132,34 @@ def load_embedding_model():
 
 @st.cache_resource(show_spinner="Connecting to LLM...")
 def load_llm():
-    """Try Groq -> HuggingFace -> OpenAI in order. Returns (llm, provider_name)."""
-    # Groq
-    if os.getenv("GROQ_API_KEY"):
-        try:
-            from langchain_groq import ChatGroq
-            return ChatGroq(model="llama-3.3-70b-versatile", temperature=0.7), "Groq"
-        except Exception as e:
-            st.warning(f"Groq init failed: {e}")
+    """
+    Try Groq first, fall back to Sea Lion (OpenAI-compatible endpoint).
+    Returns (llm, provider_name).
+    """
+    # Primary: Groq
+    try:
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(
+            model=GROQ_MODEL,
+            temperature=0.7,
+            api_key=GROQ_API_KEY,
+        )
+        return llm, f"Groq ({GROQ_MODEL})"
+    except Exception as e:
+        st.warning(f"Groq init failed, falling back to Sea Lion: {e}")
 
-    # Hugging Face
-    if os.getenv("HUGGINGFACEHUB_API_TOKEN"):
-        try:
-            from langchain_huggingface import ChatHuggingFace, HuggingFaceEndpoint
-            endpoint = HuggingFaceEndpoint(
-                repo_id="meta-llama/Llama-3.3-70B-Instruct",
-                task="text-generation",
-                max_new_tokens=1024,
-                temperature=0.7,
-            )
-            return ChatHuggingFace(llm=endpoint), "Hugging Face"
-        except Exception as e:
-            st.warning(f"Hugging Face init failed: {e}")
-
-    # OpenAI
-    if os.getenv("OPENAI_API_KEY"):
-        try:
-            from langchain_openai import ChatOpenAI
-            return ChatOpenAI(model="gpt-4o", temperature=0.7), "OpenAI"
-        except Exception as e:
-            st.warning(f"OpenAI init failed: {e}")
+    # Fallback: Sea Lion (OpenAI-compatible)
+    try:
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(
+            model=SEALION_MODEL,
+            temperature=0.7,
+            api_key=SEALION_API_KEY,
+            base_url=SEALION_BASE_URL,
+        )
+        return llm, f"Sea Lion ({SEALION_MODEL})"
+    except Exception as e:
+        st.error(f"Sea Lion init failed: {e}")
 
     return None, "None"
 
@@ -151,15 +178,41 @@ def calculate_match_score(resume_text: str, job_description: str) -> float:
 
 
 def call_llm(prompt: str) -> str:
-    """Single-shot LLM call with error handling."""
-    llm, _ = load_llm()
+    """Single-shot LLM call via LangChain wrapper (Groq → Sea Lion)."""
+    llm, provider = load_llm()
     if llm is None:
-        return "⚠️ No LLM provider configured. Add GROQ_API_KEY to your .env file."
+        return "⚠️ No LLM provider configured."
     try:
         result = llm.invoke(prompt)
         return getattr(result, "content", str(result))
     except Exception as e:
-        return f"⚠️ LLM call failed: {e}"
+        return f"⚠️ LLM call failed ({provider}): {e}"
+
+
+def call_groq_direct(prompt: str) -> str:
+    """Direct call to Groq SDK (bypasses LangChain). Useful for debugging."""
+    try:
+        resp = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ Groq direct call failed: {e}"
+
+
+def call_sealion_direct(prompt: str) -> str:
+    """Direct call to Sea Lion (OpenAI-compatible). Useful for debugging."""
+    try:
+        resp = sealion_client.chat.completions.create(
+            model=SEALION_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        return f"⚠️ Sea Lion direct call failed: {e}"
 
 
 def tailor_resume(resume_text: str, job_description: str) -> str:
@@ -279,7 +332,7 @@ def render_sidebar():
 
         _, provider = load_llm()
         if provider == "None":
-            st.warning("No LLM key set.\nAdd `GROQ_API_KEY` to `.env`.")
+            st.error("No LLM provider available.")
         else:
             st.success(f"LLM: {provider}")
 
@@ -477,19 +530,33 @@ def view_analytics():
 
 def view_settings():
     st.title("⚙️ Settings")
+
     st.markdown("**LLM Provider Status**")
     _, provider = load_llm()
     st.write(f"Active provider: **{provider}**")
 
-    st.markdown("**Environment Variables**")
+    st.markdown("**Configured Models**")
     st.code(
-        "# .env\n"
-        "GROQ_API_KEY=your_key_here\n"
-        "# HUGGINGFACEHUB_API_TOKEN=hf_...\n"
-        "# OPENAI_API_KEY=sk-...\n",
+        f"GROQ_MODEL    = {GROQ_MODEL}\n"
+        f"SEALION_MODEL = {SEALION_MODEL}\n"
+        f"SEALION_URL   = {SEALION_BASE_URL}",
         language="bash",
     )
 
+    st.markdown("**API Keys Detected**")
+    st.write(f"- GROQ_API_KEY: {'✅ set' if GROQ_API_KEY else '❌ missing'}")
+    st.write(f"- SEALION_API_KEY: {'✅ set' if SEALION_API_KEY else '❌ missing'}")
+    st.write(f"- HF_TOKEN: {'✅ set' if HF_TOKEN else '⚪ not set (optional)'}")
+
+    st.markdown("**Test Direct Calls**")
+    if st.button("Test Groq direct call"):
+        with st.spinner("Calling Groq..."):
+            st.info(call_groq_direct("Reply with: 'Groq OK'"))
+    if st.button("Test Sea Lion direct call"):
+        with st.spinner("Calling Sea Lion..."):
+            st.info(call_sealion_direct("Reply with: 'Sea Lion OK'"))
+
+    st.markdown("---")
     st.markdown("**Danger Zone**")
     if st.button("🗑 Clear all applications", type="secondary"):
         with db_session() as db:
