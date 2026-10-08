@@ -1,5 +1,5 @@
 """
-AI Job Hunt OS — Test Build v0.2
+AI Job Hunt OS — Test Build v0.3
 Streamlit app that tracks job applications and uses AI (Groq + Sea Lion)
 to tailor resumes and generate cover letters.
 
@@ -32,28 +32,59 @@ st.set_page_config(
 load_dotenv()  # Load .env if present
 
 # ============================================================
-# 🚀 API KEY CONFIGURATION (Colab + local/Streamlit Cloud compatible)
+# 🚀 API KEY CONFIGURATION (Colab + local + Streamlit Cloud)
 # ============================================================
-try:
-    from google.colab import userdata
-    GROQ_API_KEY = userdata.get("GROQ_API_KEY")
-    SEALION_API_KEY = userdata.get("SEALION_API_KEY")
-    HF_TOKEN = userdata.get("HF_TOKEN")
-except ImportError:
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-    SEALION_API_KEY = os.environ.get("SEALION_API_KEY")
-    HF_TOKEN = os.environ.get("HF_TOKEN")
 
-if not GROQ_API_KEY or not SEALION_API_KEY:
-    st.error("Missing API keys. Set GROQ_API_KEY and SEALION_API_KEY in environment or secrets.")
+def _get_secret(key: str, default=None):
+    """Try Colab userdata → os.environ → st.secrets, in that order."""
+    # 1. Google Colab
+    try:
+        from google.colab import userdata
+        val = userdata.get(key)
+        if val:
+            return val
+    except ImportError:
+        pass
+
+    # 2. Environment variables (.env or exported)
+    val = os.environ.get(key)
+    if val:
+        return val
+
+    # 3. Streamlit secrets (.streamlit/secrets.toml)
+    try:
+        val = st.secrets.get(key)
+        if val:
+            return val
+    except Exception:
+        pass
+
+    return default
+
+
+GROQ_API_KEY    = _get_secret("GROQ_API_KEY")
+SEALION_API_KEY = _get_secret("SEALION_API_KEY")   # optional fallback
+HF_TOKEN        = _get_secret("HF_TOKEN")          # optional
+
+# --- Validation: only Groq is required ---
+if not GROQ_API_KEY and not SEALION_API_KEY:
+    st.error(
+        "❌ No API keys found. Set at least one of GROQ_API_KEY or SEALION_API_KEY "
+        "in your `.env` file or Streamlit secrets."
+    )
     st.stop()
 
 if HF_TOKEN:
     os.environ["HF_TOKEN"] = HF_TOKEN
 
-groq_client = Groq(api_key=GROQ_API_KEY)
+# --- Initialize clients only if keys exist ---
+groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
+
 SEALION_BASE_URL = "https://api.sea-lion.ai/v1"
-sealion_client = OpenAI(api_key=SEALION_API_KEY, base_url=SEALION_BASE_URL)
+sealion_client = (
+    OpenAI(api_key=SEALION_API_KEY, base_url=SEALION_BASE_URL)
+    if SEALION_API_KEY else None
+)
 
 # Constants -----------------------------------------------------------------
 
@@ -69,9 +100,55 @@ STAGES = [
 DB_PATH = "job_hunt.db"
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-# LLM provider defaults
-GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-SEALION_MODEL = os.environ.get("SEALION_MODEL", "aisingapore/Llama-SEA-LION-v3-70B-IT")
+# ============================================================
+# 🧠 MODEL REGISTRY — the single source of truth for models
+# ============================================================
+# Each entry: (provider, model_id, display_label)
+# Add / remove entries here as providers update their catalogs.
+
+MODEL_REGISTRY = {
+    # --- AI Singapore Sea-Lion (OpenAI-compatible endpoint) ---
+    "Sea-Lion v4 27B": {
+        "provider": "sealion",
+        "model_id": "aisingapore/Gemma-SEA-LION-v4-27B-IT",
+        "description": "Gemma 3 27B fine-tuned for SEA languages by AI Singapore.",
+    },
+    "Sea-Lion v4 32B (Qwen)": {
+        "provider": "sealion",
+        "model_id": "aisingapore/Qwen-SEA-LION-v4-32B-IT",
+        "description": "Qwen3-32B fine-tuned for SEA tasks.",
+    },
+
+    # --- Groq (fast, free tier) ---
+    "Groq: GPT-OSS 120B": {
+        "provider": "groq",
+        "model_id": "openai/gpt-oss-120b",
+        "description": "OpenAI's open-weight MoE, 120B params, reasoning-capable.",
+    },
+    "Groq: GPT-OSS 20B": {
+        "provider": "groq",
+        "model_id": "openai/gpt-oss-20b",
+        "description": "Smaller, faster OpenAI open-weight model.",
+    },
+    "Groq: Llama 4 Scout": {
+        "provider": "groq",
+        "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "description": "Meta Llama 4 Scout, 17B MoE, fast general-purpose.",
+    },
+    "Groq: Llama 4 Maverick": {
+        "provider": "groq",
+        "model_id": "meta-llama/llama-4-maverick-17b-128e-instruct",
+        "description": "Meta Llama 4 Maverick, 17B MoE, higher capability.",
+    },
+    "Groq: Qwen 3 32B": {
+        "provider": "groq",
+        "model_id": "qwen/qwen3-32b",
+        "description": "Qwen 3 32B, strong reasoning.",
+    },
+}
+
+# Default model (change this to any key in MODEL_REGISTRY)
+DEFAULT_MODEL_KEY = "Sea-Lion v4 27B"
 
 # ---------------------------------------------------------------------------
 # 2. DATABASE LAYER
@@ -130,38 +207,51 @@ def load_embedding_model():
         return None
 
 
-@st.cache_resource(show_spinner="Connecting to LLM...")
-def load_llm():
+def get_active_model() -> tuple[str, str, str]:
     """
-    Try Groq first, fall back to Sea Lion (OpenAI-compatible endpoint).
-    Returns (llm, provider_name).
+    Read the selected model from session state.
+    Returns (provider, model_id, display_label).
     """
-    # Primary: Groq
-    try:
-        from langchain_groq import ChatGroq
-        llm = ChatGroq(
-            model=GROQ_MODEL,
-            temperature=0.7,
-            api_key=GROQ_API_KEY,
-        )
-        return llm, f"Groq ({GROQ_MODEL})"
-    except Exception as e:
-        st.warning(f"Groq init failed, falling back to Sea Lion: {e}")
+    key = st.session_state.get("selected_model_key", DEFAULT_MODEL_KEY)
+    entry = MODEL_REGISTRY.get(key, MODEL_REGISTRY[DEFAULT_MODEL_KEY])
+    return entry["provider"], entry["model_id"], key
 
-    # Fallback: Sea Lion (OpenAI-compatible)
-    try:
-        from langchain_openai import ChatOpenAI
-        llm = ChatOpenAI(
-            model=SEALION_MODEL,
-            temperature=0.7,
-            api_key=SEALION_API_KEY,
-            base_url=SEALION_BASE_URL,
-        )
-        return llm, f"Sea Lion ({SEALION_MODEL})"
-    except Exception as e:
-        st.error(f"Sea Lion init failed: {e}")
 
-    return None, "None"
+def load_llm_for(provider: str, model_id: str):
+    """
+    Build a LangChain LLM object for the given provider + model_id.
+    Returns (llm, provider_label) or (None, error_message).
+    """
+    if provider == "groq":
+        if not GROQ_API_KEY:
+            return None, "Groq API key not set"
+        try:
+            from langchain_groq import ChatGroq
+            llm = ChatGroq(
+                model=model_id,
+                temperature=0.7,
+                api_key=GROQ_API_KEY,
+            )
+            return llm, f"Groq ({model_id})"
+        except Exception as e:
+            return None, f"Groq init failed: {e}"
+
+    if provider == "sealion":
+        if not SEALION_API_KEY:
+            return None, "Sea Lion API key not set"
+        try:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(
+                model=model_id,
+                temperature=0.7,
+                api_key=SEALION_API_KEY,
+                base_url=SEALION_BASE_URL,
+            )
+            return llm, f"Sea Lion ({model_id})"
+        except Exception as e:
+            return None, f"Sea Lion init failed: {e}"
+
+    return None, f"Unknown provider: {provider}"
 
 
 def calculate_match_score(resume_text: str, job_description: str) -> float:
@@ -178,41 +268,52 @@ def calculate_match_score(resume_text: str, job_description: str) -> float:
 
 
 def call_llm(prompt: str) -> str:
-    """Single-shot LLM call via LangChain wrapper (Groq → Sea Lion)."""
-    llm, provider = load_llm()
+    """Single-shot LLM call using the currently selected model."""
+    provider, model_id, label = get_active_model()
+    llm, status = load_llm_for(provider, model_id)
     if llm is None:
-        return "⚠️ No LLM provider configured."
+        return f"⚠️ {status}"
     try:
         result = llm.invoke(prompt)
         return getattr(result, "content", str(result))
     except Exception as e:
-        return f"⚠️ LLM call failed ({provider}): {e}"
+        return f"⚠️ LLM call failed ({status}): {e}"
 
 
 def call_groq_direct(prompt: str) -> str:
-    """Direct call to Groq SDK (bypasses LangChain). Useful for debugging."""
+    """Direct call to Groq SDK using the currently selected Groq model."""
+    if groq_client is None:
+        return "⚠️ Groq client not initialized (no API key)."
+    provider, model_id, _ = get_active_model()
+    if provider != "groq":
+        return "⚠️ Currently selected model is not a Groq model."
     try:
         resp = groq_client.chat.completions.create(
-            model=GROQ_MODEL,
+            model=model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"⚠️ Groq direct call failed: {e}"
+        return f"⚠️ Groq direct call failed ({model_id}): {e}"
 
 
 def call_sealion_direct(prompt: str) -> str:
-    """Direct call to Sea Lion (OpenAI-compatible). Useful for debugging."""
+    """Direct call to Sea Lion using the currently selected Sea Lion model."""
+    if sealion_client is None:
+        return "⚠️ Sea Lion client not initialized (no API key)."
+    provider, model_id, _ = get_active_model()
+    if provider != "sealion":
+        return "⚠️ Currently selected model is not a Sea Lion model."
     try:
         resp = sealion_client.chat.completions.create(
-            model=SEALION_MODEL,
+            model=model_id,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.7,
         )
         return resp.choices[0].message.content
     except Exception as e:
-        return f"⚠️ Sea Lion direct call failed: {e}"
+        return f"⚠️ Sea Lion direct call failed ({model_id}): {e}"
 
 
 def tailor_resume(resume_text: str, job_description: str) -> str:
@@ -310,6 +411,35 @@ def svc_delete_application(app_id: int):
 # 5. UI LAYER
 # ---------------------------------------------------------------------------
 
+def render_model_selector():
+    """Sidebar widget to pick the active model. Saves choice to session_state."""
+    st.sidebar.markdown("### 🧠 AI Model")
+    options = list(MODEL_REGISTRY.keys())
+    default_idx = options.index(DEFAULT_MODEL_KEY) if DEFAULT_MODEL_KEY in options else 0
+
+    selected = st.sidebar.selectbox(
+        "Select model",
+        options,
+        index=st.session_state.get("selected_model_index", default_idx),
+        key="selected_model_widget",
+        label_visibility="collapsed",
+    )
+    st.session_state["selected_model_key"] = selected
+    st.session_state["selected_model_index"] = options.index(selected)
+
+    entry = MODEL_REGISTRY[selected]
+    provider = entry["provider"]
+    st.sidebar.caption(f"Provider: **{provider}**")
+    st.sidebar.caption(f"`{entry['model_id']}`")
+    st.sidebar.caption(entry["description"])
+
+    # Warn if the selected provider has no key
+    if provider == "groq" and not GROQ_API_KEY:
+        st.sidebar.error("Groq key missing.")
+    if provider == "sealion" and not SEALION_API_KEY:
+        st.sidebar.error("Sea Lion key missing.")
+
+
 def render_sidebar():
     with st.sidebar:
         st.title("💼 Job Hunt OS")
@@ -330,11 +460,17 @@ def render_sidebar():
 
         search = st.text_input("🔍 Search company / role", "")
 
-        _, provider = load_llm()
-        if provider == "None":
-            st.error("No LLM provider available.")
+        st.markdown("---")
+        render_model_selector()
+        st.markdown("---")
+
+        # Health check on the active model
+        provider, model_id, label = get_active_model()
+        llm, status = load_llm_for(provider, model_id)
+        if llm is None:
+            st.error(f"LLM unavailable: {status}")
         else:
-            st.success(f"LLM: {provider}")
+            st.success(f"LLM ready: {label}")
 
     return nav, search
 
@@ -427,6 +563,9 @@ def view_new_application():
     st.title("➕ New Application")
     st.caption("Paste the job description and upload your resume. AI will score, tailor, and draft.")
 
+    _, _, model_label = get_active_model()
+    st.info(f"Using model: **{model_label}**")
+
     with st.form("new_app_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
         company = c1.text_input("Company Name *")
@@ -451,10 +590,10 @@ def view_new_application():
                 match_str = f"{score:.0%}"
                 st.metric("Profile Match Score", match_str)
 
-            with st.spinner("Tailoring resume..."):
+            with st.spinner(f"Tailoring resume with {model_label}..."):
                 tailored = tailor_resume(resume_text, job_description)
 
-            with st.spinner("Drafting cover letter..."):
+            with st.spinner(f"Drafting cover letter with {model_label}..."):
                 cover = generate_cover_letter(tailored, job_description, company, role)
 
             st.success("Documents generated.")
@@ -531,15 +670,13 @@ def view_analytics():
 def view_settings():
     st.title("⚙️ Settings")
 
-    st.markdown("**LLM Provider Status**")
-    _, provider = load_llm()
-    st.write(f"Active provider: **{provider}**")
+    provider, model_id, label = get_active_model()
 
-    st.markdown("**Configured Models**")
+    st.markdown("**Active Model**")
     st.code(
-        f"GROQ_MODEL    = {GROQ_MODEL}\n"
-        f"SEALION_MODEL = {SEALION_MODEL}\n"
-        f"SEALION_URL   = {SEALION_BASE_URL}",
+        f"Display key : {label}\n"
+        f"Provider    : {provider}\n"
+        f"Model ID    : {model_id}",
         language="bash",
     )
 
@@ -549,12 +686,20 @@ def view_settings():
     st.write(f"- HF_TOKEN: {'✅ set' if HF_TOKEN else '⚪ not set (optional)'}")
 
     st.markdown("**Test Direct Calls**")
-    if st.button("Test Groq direct call"):
-        with st.spinner("Calling Groq..."):
-            st.info(call_groq_direct("Reply with: 'Groq OK'"))
-    if st.button("Test Sea Lion direct call"):
-        with st.spinner("Calling Sea Lion..."):
-            st.info(call_sealion_direct("Reply with: 'Sea Lion OK'"))
+    if provider == "groq":
+        if st.button("Test Groq direct call"):
+            with st.spinner(f"Calling Groq ({model_id})..."):
+                st.info(call_groq_direct("Reply with: 'Groq OK'"))
+    elif provider == "sealion":
+        if st.button("Test Sea Lion direct call"):
+            with st.spinner(f"Calling Sea Lion ({model_id})..."):
+                st.info(call_sealion_direct("Reply with: 'Sea Lion OK'"))
+
+    st.markdown("---")
+    st.markdown("**Available Models**")
+    for key, entry in MODEL_REGISTRY.items():
+        marker = " ← active" if key == label else ""
+        st.markdown(f"- **{key}**{marker}  \n  `{entry['model_id']}`  \n  {entry['description']}")
 
     st.markdown("---")
     st.markdown("**Danger Zone**")
@@ -571,6 +716,10 @@ def view_settings():
 # ---------------------------------------------------------------------------
 
 def main():
+    # Ensure a default model is set before the sidebar renders
+    if "selected_model_key" not in st.session_state:
+        st.session_state["selected_model_key"] = DEFAULT_MODEL_KEY
+
     nav, search = render_sidebar()
 
     if nav == "📊 Tracker":
