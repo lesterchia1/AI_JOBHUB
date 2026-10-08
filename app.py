@@ -263,8 +263,8 @@ def render_sidebar():
         st.caption("AI-powered job search tracker")
         st.markdown("---")
 
-        st.markdown("**👤 John Doe**")
-        st.caption("john@example.com")
+        st.markdown("**👤 Lester**")
+        st.caption("lesterchia1@hotmail.com")
         st.markdown("---")
 
         nav = st.radio(
