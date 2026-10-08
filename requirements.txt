@@ -5,12 +5,18 @@ pandas>=2.0.0
 # Database
 SQLAlchemy>=2.0.0
 
-# AI / LLM
+# LLM clients
+groq>=0.11.0
+openai>=1.40.0
+
+# LangChain wrappers
 langchain>=0.2.0
-langchain-groq>=0.1.0          # Default provider (fast + free tier)
-langchain-huggingface>=0.0.3   # Alternative provider
-langchain-openai>=0.1.0        # Alternative provider
-sentence-transformers>=2.7.0   # Local embeddings for match score
+langchain-groq>=0.1.0
+langchain-openai>=0.1.0
+langchain-huggingface>=0.0.3
+
+# Embeddings (local)
+sentence-transformers>=2.7.0
 
 # File parsing
 pypdf2>=3.0.0
