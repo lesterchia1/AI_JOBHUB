@@ -1,0 +1,19 @@
+# Core UI
+streamlit>=1.35.0
+pandas>=2.0.0
+
+# Database
+SQLAlchemy>=2.0.0
+
+# AI / LLM
+langchain>=0.2.0
+langchain-groq>=0.1.0          # Default provider (fast + free tier)
+langchain-huggingface>=0.0.3   # Alternative provider
+langchain-openai>=0.1.0        # Alternative provider
+sentence-transformers>=2.7.0   # Local embeddings for match score
+
+# File parsing
+pypdf2>=3.0.0
+
+# Utilities
+python-dotenv>=1.0.0
