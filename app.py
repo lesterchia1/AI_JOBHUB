@@ -130,21 +130,21 @@ MODEL_REGISTRY = {
         "model_id": "openai/gpt-oss-20b",
         "description": "Smaller, faster OpenAI open-weight model.",
     },
-    "Groq: Llama 4 Scout": {
-        "provider": "groq",
-        "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
-        "description": "Meta Llama 4 Scout, 17B MoE, fast general-purpose.",
-    },
-    "Groq: Llama 4 Maverick": {
-        "provider": "groq",
-        "model_id": "meta-llama/llama-4-maverick-17b-128e-instruct",
-        "description": "Meta Llama 4 Maverick, 17B MoE, higher capability.",
-    },
-    "Groq: Qwen 3 32B": {
-        "provider": "groq",
-        "model_id": "qwen/qwen3-32b",
-        "description": "Qwen 3 32B, strong reasoning.",
-    },
+    #"Groq: Llama 4 Scout": {
+    #    "provider": "groq",
+    #    "model_id": "meta-llama/llama-4-scout-17b-16e-instruct",
+    #    "description": "Meta Llama 4 Scout, 17B MoE, fast general-purpose.",
+    #},
+    #"Groq: Llama 4 Maverick": {
+    #    "provider": "groq",
+    #    "model_id": "meta-llama/llama-4-maverick-17b-128e-instruct",
+    #    "description": "Meta Llama 4 Maverick, 17B MoE, higher capability.",
+    #},
+    #"Groq: Qwen 3 32B": {
+    #    "provider": "groq",
+    #    "model_id": "qwen/qwen3-32b",
+    #    "description": "Qwen 3 32B, strong reasoning.",
+    #},
 }
 
 # Default model (change this to any key in MODEL_REGISTRY)
