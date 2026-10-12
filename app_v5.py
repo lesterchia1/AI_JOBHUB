@@ -81,6 +81,14 @@ SEALION_API_KEY = _get_secret("SEALION_API_KEY")
 HF_TOKEN        = _get_secret("HF_TOKEN")
 
 # ============================================================
+# 👤 USER ID CONFIGURATION
+# ============================================================
+
+# Replace this with your actual user ID from the Supabase Auth -> Users tab
+# You can also add "USER_ID" to your Streamlit secrets instead.
+USER_ID = _get_secret("USER_ID", "adaae0b2-99ef-4524-a932-90d57b3b4945")
+
+# ============================================================
 # 🗄️ DATABASE CONFIGURATION (SUPABASE)
 # ============================================================
 
@@ -219,6 +227,7 @@ class Application(Base):
     __tablename__ = "applications"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(String, nullable=True)  # <--- ADDED: Matches Supabase column
     company = Column(String, nullable=False)
     role = Column(String, nullable=False)
     job_url = Column(String, default="")
@@ -237,6 +246,7 @@ class LLMUsage(Base):
     __tablename__ = "llm_usage"
 
     id = Column(Integer, primary_key=True)
+    user_id = Column(String, nullable=True)  # <--- ADDED: Matches Supabase column
     called_at = Column(DateTime, default=datetime.now, index=True)
     provider = Column(String)
     model_key = Column(String)
@@ -330,6 +340,7 @@ def svc_log_llm_usage(
 
     with db_session() as db:
         row = LLMUsage(
+            user_id=USER_ID,  # <--- ADDED: Link to user
             provider=provider, model_key=model_key, model_id=model_id,
             operation=operation, input_tokens=input_tokens, output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
@@ -531,6 +542,8 @@ def svc_get_application(app_id: int):
 
 def svc_create_application(**kwargs):
     with db_session() as db:
+        # Ensure USER_ID is included in the new application
+        kwargs['user_id'] = USER_ID
         app = Application(**kwargs)
         db.add(app)
         db.commit()
@@ -1072,6 +1085,8 @@ def view_settings():
         # Mask password in display
         masked_url = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL
         st.code(f"Host: ...@{masked_url}")
+    st.markdown("**User ID**")
+    st.write(f"- USER_ID: {'✅ set' if USER_ID else '❌ missing'}")
     st.markdown("**API Keys Detected**")
     st.write(f"- GROQ_API_KEY: {'✅ set' if GROQ_API_KEY else '❌ missing'}")
     st.write(f"- SEALION_API_KEY: {'✅ set' if SEALION_API_KEY else '❌ missing'}")
