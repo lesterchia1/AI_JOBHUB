@@ -42,7 +42,7 @@ from streamlit_lexical_extended import streamlit_lexical_extended
 # ---------------------------------------------------------------------------
 
 st.set_page_config(
-    page_title="AI Job Hunt OS",
+    page_title="Job Hunt Hub",
     page_icon="💼",
     layout="wide",
     initial_sidebar_state="expanded",
