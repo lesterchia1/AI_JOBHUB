@@ -1,5 +1,5 @@
 """
-AI Job Hunt OS — Test Build v0.5
+AI Job Hunt Hub — Test Build v0.5
 Streamlit app that tracks job applications and uses AI (Groq + Sea Lion)
 to tailor resumes and generate cover letters.
 
@@ -605,7 +605,7 @@ def render_model_selector():
 
 def render_sidebar():
     with st.sidebar:
-        st.title("💼 Job Hunt OS")
+        st.title("💼 AI Job Hunt Hub")
         st.caption("AI-powered job search tracker")
         st.markdown("---")
         st.markdown("**👤 Lester**")
