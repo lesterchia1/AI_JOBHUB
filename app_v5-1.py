@@ -414,6 +414,18 @@ def svc_get_application(app_id: int):
         st.error(f"Error fetching application: {e}")
         return None
 
+#def svc_create_application(**kwargs):
+#    kwargs['user_id'] = USER_ID
+#    if 'applied_date' in kwargs and isinstance(kwargs['applied_date'], datetime):
+#        kwargs['applied_date'] = kwargs['applied_date'].isoformat()
+#    if 'last_updated' in kwargs and isinstance(kwargs['last_updated'], datetime):
+#        kwargs['last_updated'] = kwargs['last_updated'].isoformat()
+    
+#    res = supabase.table("applications").insert(kwargs).execute()
+#    if res.data:
+#        return res.data[0]['id']
+#    return None
+
 def svc_create_application(**kwargs):
     kwargs['user_id'] = USER_ID
     if 'applied_date' in kwargs and isinstance(kwargs['applied_date'], datetime):
@@ -421,10 +433,16 @@ def svc_create_application(**kwargs):
     if 'last_updated' in kwargs and isinstance(kwargs['last_updated'], datetime):
         kwargs['last_updated'] = kwargs['last_updated'].isoformat()
     
-    res = supabase.table("applications").insert(kwargs).execute()
-    if res.data:
-        return res.data[0]['id']
-    return None
+    try:
+        res = supabase.table("applications").insert(kwargs).execute()
+        if res.data:
+            return res.data[0]['id']
+        return None
+    except Exception as e:
+        st.error(f"Supabase HTTP Connection Error Details: {e}")
+        return None
+
+
 
 def svc_update_status(app_id: int, new_status: str):
     res = supabase.table("applications").update({
