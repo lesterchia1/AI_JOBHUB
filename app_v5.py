@@ -263,12 +263,25 @@ class LLMUsage(Base):
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
-@st.cache_resource
-def get_engine():
+
+#@st.cache_resource
+#def get_engine():
     # Use NullPool for serverless environments like Streamlit Cloud.
     # The connection string must use "postgresql+psycopg2://" and include "?sslmode=require".
-    engine = create_engine(DATABASE_URL, poolclass=NullPool)
+#    engine = create_engine(DATABASE_URL, poolclass=NullPool)
+#    return engine
+
+@st.cache_resource
+def get_engine():
+    # pool_pre_ping=True prevents dropped connection crashes caused by idle timeouts
+    engine = create_engine(
+        DATABASE_URL, 
+        poolclass=NullPool,
+        pool_pre_ping=True
+    )
     return engine
+
+
 
 @st.cache_resource
 def get_session_factory():
