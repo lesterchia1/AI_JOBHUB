@@ -1,9 +1,7 @@
-# --- PyTorch CPU-only index (must come before torch) ---
---extra-index-url https://download.pytorch.org/whl/cpu
-
 # Core UI
 streamlit>=1.35.0
 pandas>=2.0.0
+numpy>=1.26,<2.3
 
 # Database (Supabase)
 supabase>=2.0.0
@@ -15,17 +13,18 @@ alembic>=1.13.0
 groq>=0.11.0
 openai>=1.40.0
 
-# AI / LLM
-torch==2.2.2+cpu
+# AI / LLM (no torch!)
 langchain>=0.2.0
 langchain-groq>=0.1.0
 langchain-openai>=0.1.0
-sentence-transformers>=2.7.0
+
+# Match scoring (lightweight)
+scikit-learn>=1.4.0
 
 # File parsing
 pypdf2>=3.0.0
 
-# Document Generation & Editing
+# Document generation
 reportlab>=4.0.0
 python-docx>=1.1.0
 
