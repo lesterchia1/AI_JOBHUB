@@ -7,6 +7,8 @@ supabase>=2.0.0
 #SQLAlchemy>=2.0.0
 #psycopg2-binary>=2.9.0  # PostgreSQL driver for Supabase
 #alembic>=1.13.0
+sqlalchemy
+
 
 # LLM clients
 groq>=0.11.0
