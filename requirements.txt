@@ -1,39 +1,39 @@
 # Core UI
-#streamlit>=1.35.0
-#pandas>=2.0.0
+streamlit>=1.35.0
+pandas>=2.0.0
 
 # Database (Supabase HTTPS REST API)
-#supabase>=2.0.0
-#SQLAlchemy>=2.0.0
-#psycopg2-binary>=2.9.0  # PostgreSQL driver for Supabase
-#alembic>=1.13.0
+supabase>=2.0.0
+SQLAlchemy>=2.0.0
+psycopg2-binary>=2.9.0  # PostgreSQL driver for Supabase
+alembic>=1.13.0
 #sqlalchemy
-#psycopg2
+psycopg2
 
 
 # LLM clients
-#groq>=0.11.0
-#openai>=1.40.0
+groq>=0.11.0
+openai>=1.40.0
 
 # AI / LLM
-#torch>=2.0.0
-#torchvision>=0.15.0
-#langchain>=0.2.0
-#langchain-groq>=0.1.0
-#langchain-openai>=0.1.0
-#langchain-huggingface>=0.0.3
-#sentence-transformers>=2.7.0
+torch>=2.0.0
+torchvision>=0.15.0
+langchain>=0.2.0
+langchain-groq>=0.1.0
+langchain-openai>=0.1.0
+langchain-huggingface>=0.0.3
+sentence-transformers>=2.7.0
 
 # File parsing
-#pypdf2>=3.0.0
+pypdf2>=3.0.0
 
 # Document Generation & Editing
-#streamlit-lexical-extended>=0.3.7
-#reportlab>=4.0.0
-#python-docx>=1.1.0
+streamlit-lexical-extended>=0.3.7
+reportlab>=4.0.0
+python-docx>=1.1.0
 
 # Utilities
-#python-dotenv>=1.0.0
+python-dotenv>=1.0.0
 
 
 
@@ -41,35 +41,4 @@
 
 
 
-
-# Core UI
-streamlit==1.39.0
-pandas==2.2.3
-
-# Database
-supabase==2.10.0
-psycopg2-binary==2.9.9
-SQLAlchemy==2.0.36
-
-# LLM Clients
-groq==0.13.0
-openai==1.58.1
-
-# AI / LLM (Lightweight versions)
-langchain==0.3.7
-langchain-groq==0.2.2
-langchain-openai==0.2.9
-# Removed langchain-huggingface and sentence-transformers to save memory.
-# If you must use them, add them back after other packages install successfully.
-
-# File parsing
-pypdf2==3.0.1
-
-# Document Generation & Editing
-reportlab==4.2.5
-python-docx==1.1.2
-
-# Utilities
-python-dotenv==1.0.1
-numpy==1.26.4  # Pinned to a stable version compatible with torch
 
