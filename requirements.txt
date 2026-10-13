@@ -50,7 +50,6 @@ pandas==2.2.3
 supabase==2.10.0
 psycopg2-binary==2.9.9
 SQLAlchemy==2.0.36
-psycopg2
 
 # LLM Clients
 groq==0.13.0
