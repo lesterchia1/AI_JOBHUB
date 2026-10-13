@@ -1,13 +1,14 @@
 """
-AI Job Hunt Hub — Test Build v0.5
+AI Job Hunt Hub — Test Build v5.0
 Streamlit app that tracks job applications and uses AI (Groq + Sea Lion)
 to tailor resumes and generate cover letters.
 
-Now with:
+Features:
 - Supabase (PostgreSQL) persistent storage
 - Human-in-the-loop editing for resume & cover letter
 - PDF and DOCX export
 - LLM Monitoring dashboard
+- Lightweight TF-IDF match scoring (no torch required)
 
 Run:
     streamlit run app.py
@@ -27,15 +28,15 @@ from sqlalchemy.pool import NullPool
 from groq import Groq
 from openai import OpenAI
 
+# Match scoring (lightweight, no torch)
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+
 # Document generation
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.platypus import SimpleDocTemplate, Paragraph
 from docx import Document
-from docx.shared import Inches
-
-# Rich text editor
-from streamlit_lexical_extended import streamlit_lexical_extended
 
 # ---------------------------------------------------------------------------
 # 1. CONFIGURATION
@@ -50,13 +51,14 @@ st.set_page_config(
 
 load_dotenv()
 
+
 # ============================================================
 # 🚀 API KEY CONFIGURATION
 # ============================================================
 
 def _get_secret(key: str, default=None):
     try:
-        from google.colab import userdata
+        from google.colab import userdata  # type: ignore
         val = userdata.get(key)
         if val:
             return val
@@ -76,6 +78,7 @@ def _get_secret(key: str, default=None):
 
     return default
 
+
 GROQ_API_KEY    = _get_secret("GROQ_API_KEY")
 SEALION_API_KEY = _get_secret("SEALION_API_KEY")
 HF_TOKEN        = _get_secret("HF_TOKEN")
@@ -84,16 +87,12 @@ HF_TOKEN        = _get_secret("HF_TOKEN")
 # 👤 USER ID CONFIGURATION
 # ============================================================
 
-# Replace this with your actual user ID from the Supabase Auth -> Users tab
-# You can also add "USER_ID" to your Streamlit secrets instead.
 USER_ID = _get_secret("USER_ID", "adaae0b2-99ef-4524-a932-90d57b3b4945")
 
 # ============================================================
 # 🗄️ DATABASE CONFIGURATION (SUPABASE)
 # ============================================================
 
-# Get the connection string from Streamlit secrets.
-# The string must start with "postgresql+psycopg2://" for SQLAlchemy.
 DATABASE_URL = _get_secret("DATABASE_URL")
 
 if not DATABASE_URL:
@@ -125,7 +124,9 @@ sealion_client = (
     if SEALION_API_KEY else None
 )
 
-# Constants -----------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 STAGES = [
     {"id": "Applied",      "name": "Applied",      "color": "#3498db"},
@@ -170,38 +171,24 @@ DEFAULT_MODEL_KEY = "Sea-Lion v4 27B"
 # ============================================================
 
 MODEL_PRICING = {
-    # --- Groq: GPT-OSS 120B ---
     "openai/gpt-oss-120b": {
-        "input": 0.15,
-        "cached_input": 0.075,
-        "output": 0.60,
-        "context_window": 131072,
-        "max_output": 65536,
+        "input": 0.15, "cached_input": 0.075, "output": 0.60,
+        "context_window": 131072, "max_output": 65536,
     },
-    # --- Groq: GPT-OSS 20B ---
     "openai/gpt-oss-20b": {
-        "input": 0.075,
-        "cached_input": 0.037,
-        "output": 0.30,
-        "context_window": 131072,
-        "max_output": 65536,
+        "input": 0.075, "cached_input": 0.037, "output": 0.30,
+        "context_window": 131072, "max_output": 65536,
     },
-    # --- AI Singapore Sea-Lion (free tier) ---
     "aisingapore/Gemma-SEA-LION-v4-27B-IT": {
-        "input": 0.0,
-        "cached_input": 0.0,
-        "output": 0.0,
-        "context_window": 131072,
-        "max_output": 65536,
+        "input": 0.0, "cached_input": 0.0, "output": 0.0,
+        "context_window": 131072, "max_output": 65536,
     },
     "aisingapore/Qwen-SEA-LION-v4-32B-IT": {
-        "input": 0.0,
-        "cached_input": 0.0,
-        "output": 0.0,
-        "context_window": 131072,
-        "max_output": 65536,
+        "input": 0.0, "cached_input": 0.0, "output": 0.0,
+        "context_window": 131072, "max_output": 65536,
     },
 }
+
 
 def get_pricing(model_id: str) -> dict:
     return MODEL_PRICING.get(
@@ -210,6 +197,7 @@ def get_pricing(model_id: str) -> dict:
          "context_window": 0, "max_output": 0},
     )
 
+
 def compute_cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> float:
     p = get_pricing(model_id)
     return (
@@ -217,17 +205,19 @@ def compute_cost_usd(model_id: str, input_tokens: int, output_tokens: int) -> fl
         + (output_tokens / 1_000_000) * p["output"]
     )
 
+
 # ---------------------------------------------------------------------------
 # 2. DATABASE LAYER
 # ---------------------------------------------------------------------------
 
 Base = declarative_base()
 
+
 class Application(Base):
     __tablename__ = "applications"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(String, nullable=True)  # <--- ADDED: Matches Supabase column
+    user_id = Column(String, nullable=True)
     company = Column(String, nullable=False)
     role = Column(String, nullable=False)
     job_url = Column(String, default="")
@@ -242,11 +232,12 @@ class Application(Base):
     def to_dict(self):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
+
 class LLMUsage(Base):
     __tablename__ = "llm_usage"
 
     id = Column(Integer, primary_key=True)
-    user_id = Column(String, nullable=True)  # <--- ADDED: Matches Supabase column
+    user_id = Column(String, nullable=True)
     called_at = Column(DateTime, default=datetime.now, index=True)
     provider = Column(String)
     model_key = Column(String)
@@ -264,49 +255,34 @@ class LLMUsage(Base):
         return {c.name: getattr(self, c.name) for c in self.__table__.columns}
 
 
-#@st.cache_resource
-#def get_engine():
-    # Use NullPool for serverless environments like Streamlit Cloud.
-    # The connection string must use "postgresql+psycopg2://" and include "?sslmode=require".
-#    engine = create_engine(DATABASE_URL, poolclass=NullPool)
-#    return engine
-
 @st.cache_resource
 def get_engine():
-    # pool_pre_ping=True prevents dropped connection crashes caused by idle timeouts
-    engine = create_engine(
-        DATABASE_URL, 
+    # pool_pre_ping=True prevents dropped connection crashes from idle timeouts
+    return create_engine(
+        DATABASE_URL,
         poolclass=NullPool,
-        pool_pre_ping=True
+        pool_pre_ping=True,
     )
-    return engine
-
 
 
 @st.cache_resource
 def get_session_factory():
     return sessionmaker(bind=get_engine(), autoflush=False, autocommit=False)
 
+
 def db_session():
     return get_session_factory()()
+
 
 # ---------------------------------------------------------------------------
 # 3. AI LAYER
 # ---------------------------------------------------------------------------
 
-@st.cache_resource(show_spinner="Loading embedding model (first run only)...")
-def load_embedding_model():
-    try:
-        from sentence_transformers import SentenceTransformer
-        return SentenceTransformer("all-MiniLM-L6-v2")
-    except Exception as e:
-        st.warning(f"Embedding model unavailable: {e}")
-        return None
-
 def get_active_model() -> tuple[str, str, str]:
     key = st.session_state.get("selected_model_key", DEFAULT_MODEL_KEY)
     entry = MODEL_REGISTRY.get(key, MODEL_REGISTRY[DEFAULT_MODEL_KEY])
     return entry["provider"], entry["model_id"], key
+
 
 def load_llm_for(provider: str, model_id: str):
     if provider == "groq":
@@ -334,6 +310,7 @@ def load_llm_for(provider: str, model_id: str):
 
     return None, f"Unknown provider: {provider}"
 
+
 def _extract_usage_from_langchain(result) -> tuple[int, int]:
     um = getattr(result, "usage_metadata", None)
     if um:
@@ -341,6 +318,7 @@ def _extract_usage_from_langchain(result) -> tuple[int, int]:
     rm = getattr(result, "response_metadata", None) or {}
     tu = rm.get("token_usage") or rm.get("usage") or {}
     return int(tu.get("prompt_tokens", 0)), int(tu.get("completion_tokens", 0))
+
 
 def svc_log_llm_usage(
     *, provider, model_key, model_id, operation,
@@ -353,7 +331,7 @@ def svc_log_llm_usage(
 
     with db_session() as db:
         row = LLMUsage(
-            user_id=USER_ID,  # <--- ADDED: Link to user
+            user_id=USER_ID,
             provider=provider, model_key=model_key, model_id=model_id,
             operation=operation, input_tokens=input_tokens, output_tokens=output_tokens,
             total_tokens=input_tokens + output_tokens,
@@ -364,16 +342,19 @@ def svc_log_llm_usage(
         db.add(row)
         db.commit()
 
+
 def calculate_match_score(resume_text: str, job_description: str) -> float:
+    """Lightweight TF-IDF cosine similarity. No torch / no downloads."""
     if not resume_text or not job_description:
         return 0.0
-    model = load_embedding_model()
-    if model is None:
+    try:
+        vec = TfidfVectorizer(stop_words="english")
+        tfidf = vec.fit_transform([resume_text, job_description])
+        return float(cosine_similarity(tfidf[0], tfidf[1])[0][0])
+    except Exception as e:
+        st.warning(f"Match scoring unavailable: {e}")
         return 0.0
-    from sentence_transformers import util
-    emb = model.encode([job_description, resume_text], convert_to_tensor=True)
-    score = util.cos_sim(emb[0], emb[1])
-    return float(score[0][0])
+
 
 def call_llm(prompt: str, operation: str = "generic") -> str:
     provider, model_id, label = get_active_model()
@@ -404,6 +385,7 @@ def call_llm(prompt: str, operation: str = "generic") -> str:
             latency_seconds=latency, success=False, error_message=str(e),
         )
         return f"⚠️ LLM call failed ({status}): {e}"
+
 
 def call_groq_direct(prompt: str, operation: str = "direct_test") -> str:
     if groq_client is None:
@@ -437,6 +419,7 @@ def call_groq_direct(prompt: str, operation: str = "direct_test") -> str:
         )
         return f"⚠️ Groq direct call failed ({model_id}): {e}"
 
+
 def call_sealion_direct(prompt: str, operation: str = "direct_test") -> str:
     if sealion_client is None:
         return "⚠️ Sea Lion client not initialized (no API key)."
@@ -469,6 +452,7 @@ def call_sealion_direct(prompt: str, operation: str = "direct_test") -> str:
         )
         return f"⚠️ Sea Lion direct call failed ({model_id}): {e}"
 
+
 def tailor_resume(resume_text: str, job_description: str) -> str:
     prompt = f"""You are an expert resume writer.
 Rewrite the resume below to emphasize experience relevant to the job description.
@@ -484,6 +468,7 @@ CURRENT RESUME:
 TAILORED RESUME:"""
     return call_llm(prompt, operation="tailor_resume")
 
+
 def generate_cover_letter(resume_text: str, job_description: str, company: str, role: str) -> str:
     prompt = f"""Write a professional, concise cover letter for the {role} role at {company}.
 Ground it in the resume and job description below. Do NOT use placeholders like [Your Name].
@@ -497,6 +482,7 @@ RESUME:
 COVER LETTER:"""
     return call_llm(prompt, operation="cover_letter")
 
+
 def extract_pdf_text(uploaded_file) -> str:
     try:
         from PyPDF2 import PdfReader
@@ -505,6 +491,7 @@ def extract_pdf_text(uploaded_file) -> str:
     except Exception as e:
         st.error(f"Failed to read PDF: {e}")
         return ""
+
 
 def classify_email_status(body: str) -> str:
     b = body.lower()
@@ -518,27 +505,30 @@ def classify_email_status(body: str) -> str:
         return "Acknowledged"
     return "Applied"
 
+
 # ---------------------------------------------------------------------------
 # 3b. DOCUMENT EXPORT HELPERS
 # ---------------------------------------------------------------------------
 
-def generate_pdf_bytes(text: str, filename: str) -> bytes:
+def generate_pdf_bytes(text: str, filename: str = "document.pdf") -> bytes:
     """Generates a simple PDF from a string of text."""
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=LETTER)
     styles = getSampleStyleSheet()
-    story = [Paragraph(text, styles["Normal"])]
+    story = [Paragraph(text.replace("\n", "<br/>"), styles["Normal"])]
     doc.build(story)
     return buffer.getvalue()
+
 
 def generate_docx_bytes(text: str) -> bytes:
     """Generates a DOCX document from a string of text."""
     doc = Document()
-    for line in text.split('\n'):
+    for line in text.split("\n"):
         doc.add_paragraph(line)
     buffer = io.BytesIO()
     doc.save(buffer)
     return buffer.getvalue()
+
 
 # ---------------------------------------------------------------------------
 # 4. SERVICE LAYER
@@ -546,22 +536,27 @@ def generate_docx_bytes(text: str) -> bytes:
 
 def svc_list_applications():
     with db_session() as db:
-        return [a.to_dict() for a in db.query(Application).order_by(Application.last_updated.desc()).all()]
+        return [
+            a.to_dict()
+            for a in db.query(Application).order_by(Application.last_updated.desc()).all()
+        ]
+
 
 def svc_get_application(app_id: int):
     with db_session() as db:
         app = db.query(Application).filter(Application.id == app_id).first()
         return app.to_dict() if app else None
 
+
 def svc_create_application(**kwargs):
     with db_session() as db:
-        # Ensure USER_ID is included in the new application
-        kwargs['user_id'] = USER_ID
+        kwargs["user_id"] = USER_ID
         app = Application(**kwargs)
         db.add(app)
         db.commit()
         db.refresh(app)
         return app.id
+
 
 def svc_update_status(app_id: int, new_status: str):
     with db_session() as db:
@@ -572,6 +567,7 @@ def svc_update_status(app_id: int, new_status: str):
             db.commit()
             return True
     return False
+
 
 def svc_update_application_text(app_id: int, resume_text: str, cover_letter: str):
     with db_session() as db:
@@ -584,12 +580,14 @@ def svc_update_application_text(app_id: int, resume_text: str, cover_letter: str
             return True
     return False
 
+
 def svc_delete_application(app_id: int):
     with db_session() as db:
         app = db.query(Application).filter(Application.id == app_id).first()
         if app:
             db.delete(app)
             db.commit()
+
 
 def svc_list_llm_usage(days: int = 7):
     from datetime import timedelta
@@ -602,6 +600,7 @@ def svc_list_llm_usage(days: int = 7):
             .all()
         )
         return [r.to_dict() for r in rows]
+
 
 # ---------------------------------------------------------------------------
 # 5. UI LAYER
@@ -628,6 +627,7 @@ def render_model_selector():
         st.sidebar.error("Groq key missing.")
     if provider == "sealion" and not SEALION_API_KEY:
         st.sidebar.error("Sea Lion key missing.")
+
 
 def render_sidebar():
     with st.sidebar:
@@ -657,6 +657,7 @@ def render_sidebar():
             st.success(f"LLM ready: {label}")
     return nav, search
 
+
 def render_kpi_banner(df: pd.DataFrame):
     total = len(df)
     applied = int((df["status"] == "Applied").sum()) if total else 0
@@ -667,6 +668,7 @@ def render_kpi_banner(df: pd.DataFrame):
     c2.metric("Applied", applied)
     c3.metric("Interviewing", interviewing)
     c4.metric("Offers", offers)
+
 
 def render_kanban(df: pd.DataFrame):
     cols = st.columns(len(STAGES))
@@ -708,6 +710,7 @@ def render_kanban(df: pd.DataFrame):
                             svc_delete_application(int(row["id"]))
                             st.rerun()
 
+
 def view_tracker(search: str):
     st.title("📊 Tracker")
     st.caption("Track your applications from wishlist to offer.")
@@ -727,6 +730,7 @@ def view_tracker(search: str):
         st.info("No applications yet. Use **➕ New Application** in the sidebar to add one.")
     else:
         render_kanban(df)
+
 
 def view_new_application():
     st.title("➕ New Application")
@@ -778,6 +782,7 @@ def view_new_application():
                 "Upload a PDF + paste a job description to enable AI features."
             )
 
+
 def view_edit_export():
     st.title("📝 Edit & Export Documents")
     st.caption("Refine your AI-generated resume and cover letter, then export as PDF or DOCX.")
@@ -787,7 +792,7 @@ def view_edit_export():
         st.info("No applications found. Add one first from **➕ New Application**.")
         return
 
-    app_options = {f"#{a['id']} · {a['company']} · {a['role']}": a['id'] for a in apps}
+    app_options = {f"#{a['id']} · {a['company']} · {a['role']}": a["id"] for a in apps}
     selected_label = st.selectbox("Select an application to edit", list(app_options.keys()))
     app_id = app_options[selected_label]
 
@@ -803,16 +808,19 @@ def view_edit_export():
     tab1, tab2 = st.tabs(["📄 Tailored Resume", "✉️ Cover Letter"])
 
     with tab1:
-        edited_resume = streamlit_lexical_extended(
-            value=app.get("resume_text", ""),
-            key=f"resume_editor_{app_id}",
+        edited_resume = st.text_area(
+            "Resume",
+            value=app.get("resume_text", "") or "",
             height=500,
-            toolbar=["undo", "redo", "block_type", "bold", "italic", "underline", "bullet_list", "numbered_list"],
+            key=f"resume_editor_{app_id}",
+            label_visibility="collapsed",
         )
         col1, col2 = st.columns(2)
         with col1:
             if st.button("💾 Save Resume", key=f"save_resume_{app_id}"):
-                svc_update_application_text(app_id, edited_resume, app.get("cover_letter", ""))
+                svc_update_application_text(
+                    app_id, edited_resume, app.get("cover_letter", "") or ""
+                )
                 st.success("Resume saved.")
                 st.rerun()
         with col2:
@@ -826,16 +834,19 @@ def view_edit_export():
             )
 
     with tab2:
-        edited_cover = streamlit_lexical_extended(
-            value=app.get("cover_letter", ""),
-            key=f"cover_editor_{app_id}",
+        edited_cover = st.text_area(
+            "Cover Letter",
+            value=app.get("cover_letter", "") or "",
             height=500,
-            toolbar=["undo", "redo", "block_type", "bold", "italic", "underline", "bullet_list", "numbered_list"],
+            key=f"cover_editor_{app_id}",
+            label_visibility="collapsed",
         )
         col1, col2 = st.columns(2)
         with col1:
             if st.button("💾 Save Cover Letter", key=f"save_cover_{app_id}"):
-                svc_update_application_text(app_id, app.get("resume_text", ""), edited_cover)
+                svc_update_application_text(
+                    app_id, app.get("resume_text", "") or "", edited_cover
+                )
                 st.success("Cover letter saved.")
                 st.rerun()
         with col2:
@@ -847,6 +858,7 @@ def view_edit_export():
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"docx_cover_{app_id}",
             )
+
 
 def view_outbox():
     st.title("📥 Outbox")
@@ -862,6 +874,7 @@ def view_outbox():
     body = st.text_area("Paste an email body:")
     if body:
         st.success(f"Detected status: **{classify_email_status(body)}**")
+
 
 def view_analytics():
     st.title("📈 Analytics")
@@ -880,6 +893,7 @@ def view_analytics():
             df["date"] = pd.to_datetime(df["applied_date"]).dt.date
             st.line_chart(df.groupby("date").size())
 
+
 # ---------------------------------------------------------------------------
 # 5b. MONITORING VIEW
 # ---------------------------------------------------------------------------
@@ -887,8 +901,10 @@ def view_analytics():
 def _fmt_int(n):
     return f"{int(n):,}"
 
+
 def _fmt_usd(v):
     return f"${v:,.4f}" if v < 1 else f"${v:,.2f}"
+
 
 def view_monitoring():
     st.title("🔍 LLM Monitoring")
@@ -1055,6 +1071,7 @@ def view_monitoring():
     st.markdown("---")
     _render_pricing_reference()
 
+
 def _render_pricing_reference():
     st.subheader("💲 Model pricing reference")
     st.caption("Per 1M tokens (USD). Groq prices per user's plan; Sea-Lion via AI Singapore is free-tier.")
@@ -1078,6 +1095,7 @@ def _render_pricing_reference():
         "+ (output_tokens / 1,000,000) × output_price`"
     )
 
+
 # ---------------------------------------------------------------------------
 # 5c. SETTINGS VIEW
 # ---------------------------------------------------------------------------
@@ -1095,7 +1113,6 @@ def view_settings():
     st.markdown("**Database Info**")
     st.write(f"- DATABASE_URL: {'✅ set' if DATABASE_URL else '❌ missing'}")
     if DATABASE_URL:
-        # Mask password in display
         masked_url = DATABASE_URL.split("@")[-1] if "@" in DATABASE_URL else DATABASE_URL
         st.code(f"Host: ...@{masked_url}")
     st.markdown("**User ID**")
@@ -1136,6 +1153,7 @@ def view_settings():
             st.success("LLM usage logs cleared.")
             st.rerun()
 
+
 # ---------------------------------------------------------------------------
 # 6. MAIN
 # ---------------------------------------------------------------------------
@@ -1158,6 +1176,7 @@ def main():
         view_monitoring()
     elif nav == "⚙️ Settings":
         view_settings()
+
 
 if __name__ == "__main__":
     main()
